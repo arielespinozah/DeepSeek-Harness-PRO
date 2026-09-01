@@ -27,6 +27,37 @@ distribución.
 
 ---
 
+## 🆚 ¿Qué es esto frente al DeepSeek Harness oficial?
+
+**Transparencia total:** este proyecto **no modifica las capacidades del
+agente**. El motor (agente, herramientas, modelos, interfaz web) es
+**exactamente el código oficial** de
+[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness),
+sin cambios. No hay "más inteligencia" ni funciones extra del harness aquí.
+
+Lo que sí aporta es la **capa de escritorio** que el oficial no tiene:
+
+| Aspecto | DeepSeek Harness oficial (`dsh`) | Este proyecto |
+|---|---|---|
+| Instalación en Windows | Manual: Node.js + clonar + `pnpm install` + `npm run build` | **Instalador `.exe` de 1 clic** |
+| Interfaz | Pestaña del navegador (`dsh web`) | **Ventana de escritorio nativa** |
+| Actualizaciones | Rebuild manual de todo el árbol | **Auto-update con 1 clic** (GitHub Releases) |
+| Ventanas de consola | Aparecen al ejecutar comandos | **Ocultas** (no interrumpen) |
+| Datos del usuario | Varían según cómo lo lances | **Centralizados en `%APPDATA%`**, desinstalación limpia |
+| Capacidades del agente | Referencia | **Idénticas** (mismo binario empaquetado) |
+
+**En una frase:** es el mismo DeepSeek Harness, empaquetado como un programa
+de Windows normal — instalable, con ventana propia, auto-actualizable y sin
+consolas saltando. Es el equivalente a *GitHub Desktop* frente a *git* por
+terminal, o *VS Code* frente a *code* por línea de comandos: mismo motor,
+otra experiencia de uso.
+
+> Si buscas *más capacidades de agente*, este no es el proyecto — eso vive en
+> el repo oficial. Si buscas *usarlo como un programa instalado en vez de un
+> web local*, esto es exactamente para eso.
+
+---
+
 ## 📥 Instalación en Windows (usuarios finales)
 
 ### Opción A — Instalador automático (recomendada)
