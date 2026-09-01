@@ -1,0 +1,20 @@
+# Dependencias
+node_modules/
+
+# Builds e instaladores
+dist/
+out/
+*.exe
+*.blockmap
+latest.yml
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema
+Thumbs.db
+.DS_Store
+
+# DSH server empaquetado (se regenera desde el repo oficial)
+dsh-app/apps/desktop/server/
