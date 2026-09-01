@@ -1,0 +1,71 @@
+{
+  "name": "deepseek-harness-desktop",
+  "description": "DeepSeek Harness Desktop: Electron shell around the dsh web server with GitHub Releases auto-update",
+  "version": "0.1.4",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "pack": "electron-builder --win",
+    "publish": "electron-builder --win --publish always"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  },
+  "build": {
+    "appId": "com.deepseek.harness.desktop",
+    "productName": "DeepSeek Harness Desktop",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dsh-app/apps/desktop/server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!node_modules"
+        ]
+      },
+      {
+        "from": "../dsh-app/apps/desktop/server/node_modules",
+        "to": "server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "arielespinozah",
+      "repo": "DeepSeek-Harness-PRO"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon-512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DeepSeek Harness Desktop",
+      "artifactName": "DeepSeek.Harness.Desktop.Setup.${version}.exe"
+    }
+  },
+  "allowScripts": {
+    "electron@37.10.3": true,
+    "electron-winstaller@5.4.0": true
+  }
+}
