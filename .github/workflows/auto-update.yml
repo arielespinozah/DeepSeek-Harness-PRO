@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: "0 */6 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Forzar re-publicacion aunque no haya version nueva (true/false)"
+        required: false
+        default: "false"
 
 # Permisos: GITHUB_TOKEN necesita escribir contenidos (crear release/commit).
 permissions:
@@ -37,11 +42,19 @@ jobs:
           # Hash determinista (7 hex) derivado del tag para DSH_CLIENT_COMMIT_HASH
           SHA=$(echo -n "$LATEST" | sha1sum | cut -c1-7)
           echo "upstream_sha=$SHA" >> "$GITHUB_OUTPUT"
-          # Ultimo release que YA publicamos (para no repetir el mismo tag)
-          OURS=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" \
-            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const r=(j||[]).find(x=>!x.draft);if(!r){console.log('none');return};const b=r.body||'';const m=b.match(/upstream: (\S+)/);console.log(m?m[1]:'none')})")
-          echo "ultimo upstream procesado: $OURS | oficial actual: $LATEST"
-          if [ "$OURS" != "$LATEST" ]; then echo "has_update=true" >> "$GITHUB_OUTPUT"; else echo "has_update=false" >> "$GITHUB_OUTPUT"; fi
+          # Ultimo upstream que YA procesamos, leido del archivo de estado del repo
+          STATE=$(curl -s "https://raw.githubusercontent.com/${{ github.repository }}/main/upstream-state.txt")
+          STATE=$(echo "$STATE" | tr -d '[:space:]')
+          echo "estado previo: '$STATE' | oficial actual: '$LATEST'"
+          FORCE="${{ github.event.inputs.force }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+            echo "(modo forzado)"
+          elif [ "$STATE" != "$LATEST" ]; then
+            echo "has_update=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+          fi
 
   build-and-publish:
     name: Compilar y publicar instalador
@@ -129,24 +142,87 @@ jobs:
           # Guardar para el paso de anotacion
           "NEXT_VERSION=$next" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Publicar instalador (electron-builder)
+      - name: Generar instalador (electron-builder, sin publicar)
         shell: pwsh
         working-directory: desktop
-        run: npx electron-builder --win --publish always
+        run: npx electron-builder --win --publish never
 
-      - name: Anotar el tag upstream en la release
+      - name: Publicar release limpia (1 release, 3 assets)
         shell: pwsh
+        env:
+          UPSTREAM_TAG: ${{ needs.check-upstream.outputs.upstream_tag }}
+        working-directory: desktop
         run: |
+          # Publicacion manual via API para evitar las releases duplicadas que
+          # electron-builder --publish always genera (una con tag + otra
+          # "untagged"). Aqui: 1) limpiamos cualquier release previa con este
+          # tag o drafts huerfanos, 2) creamos UNA release y 3) subimos los
+          # 3 assets (exe + blockmap + latest.yml) a esa misma release.
+          $ErrorActionPreference = 'Stop'
+          $token = $env:GH_TOKEN
+          $api = "https://api.github.com/repos/${{ github.repository }}"
           $ver = $env:NEXT_VERSION
           $tag = "v$ver"
-          $upstream = "${{ needs.check-upstream.outputs.upstream_tag }}"
-          Start-Sleep -Seconds 5
-          $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases" -Headers @{ Authorization = "token $env:GH_TOKEN" } -TimeoutSec 30
-          $rel = $rels | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
-          if ($rel) {
-            $body = "Instalador de escritorio generado automaticamente desde DeepSeek Harness oficial.`n`nupstream: $upstream"
-            Invoke-RestMethod -Method Patch -Uri "https://api.github.com/repos/${{ github.repository }}/releases/$($rel.id)" -Headers @{ Authorization = "token $env:GH_TOKEN" } -ContentType "application/json" -Body (@{ body = $body } | ConvertTo-Json) -TimeoutSec 30 | Out-Null
-            Write-Host "release $tag anotada con upstream: $upstream"
-          } else {
-            Write-Host "AVISO: no se encontro la release $tag (revisar logs)"
+          $upstream = $env:UPSTREAM_TAG
+          $headers = @{ Authorization = "token $token"; 'User-Agent' = 'dsh-auto-publish' }
+
+          # --- 1. Limpieza: borrar releases (incl. drafts) que ya usen este tag,
+          #       y drafts "untagged-*" huerfanos de ejecuciones anteriores ---
+          $rels = Invoke-RestMethod -Uri "$api/releases?per_page=100" -Headers $headers -TimeoutSec 30
+          foreach ($rel in $rels) {
+            $isOurs = $rel.tag_name -eq $tag
+            $isOrphanDraft = $rel.draft -and $rel.tag_name -like 'untagged-*'
+            if ($isOurs -or $isOrphanDraft) {
+              Write-Host "limpiando release previa: $($rel.tag_name) (id $($rel.id))"
+              Invoke-RestMethod -Method Delete -Uri "$api/releases/$($rel.id)" -Headers $headers -TimeoutSec 30 | Out-Null
+            }
           }
+          # Si el tag quedo huerfano en git refs (release borrada), lo eliminamos
+          try {
+            Invoke-RestMethod -Method Delete -Uri "$api/git/refs/tags/$tag" -Headers $headers -TimeoutSec 30 | Out-Null
+            Write-Host "tag huerfano $tag eliminado"
+          } catch { Write-Host "tag $tag no existia (ok)" }
+
+          # --- 2. Crear la release unica ---
+          $body = "Instalador de escritorio generado automaticamente desde DeepSeek Harness oficial.`n`nupstream: $upstream`nserver: $upstream"
+          $payload = @{ tag_name = $tag; name = $tag; body = $body; draft = $false; prerelease = $false } | ConvertTo-Json
+          $release = Invoke-RestMethod -Method Post -Uri "$api/releases" -Headers $headers -ContentType 'application/json' -Body $payload -TimeoutSec 30
+          Write-Host "release creada: $($release.html_url)"
+
+          # --- 3. Subir los 3 assets a ESA release ---
+          $uploadBase = $release.upload_url -replace '\{\?name,label\}', ''
+          $assets = @(
+            "dist\DeepSeek.Harness.Desktop.Setup.$ver.exe",
+            "dist\DeepSeek.Harness.Desktop.Setup.$ver.exe.blockmap",
+            "dist\latest.yml"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path $asset)) { Write-Host "AVISO: no existe $asset"; continue }
+            $name = Split-Path $asset -Leaf
+            $url = "$uploadBase`?name=$([uri]::EscapeDataString($name))"
+            $upHeaders = @{ Authorization = "token $token"; 'User-Agent' = 'dsh-auto-publish'; 'Content-Type' = 'application/octet-stream' }
+            Write-Host "subiendo $name ..."
+            $up = Invoke-WebRequest -Method Post -Uri $url -Headers $upHeaders -InFile (Resolve-Path $asset) -UseBasicParsing -TimeoutSec 600
+            if ($up.StatusCode -ge 200 -and $up.StatusCode -lt 300) { Write-Host "  [OK] $name" }
+            else { Write-Host "  [FALLO] $name (status $($up.StatusCode))" }
+          }
+          Write-Host "publicacion completada para $tag (upstream $upstream)"
+
+      - name: Guardar estado del upstream procesado
+        shell: pwsh
+        run: |
+          # Registra en el repo el ultimo upstream ya procesado, para que el
+          # proximo chequeo no vuelva a compilar el mismo tag.
+          $token = $env:GH_TOKEN
+          $api = "https://api.github.com/repos/${{ github.repository }}"
+          $headers = @{ Authorization = "token $token"; 'User-Agent' = 'dsh-auto-publish' }
+          $upstream = "${{ needs.check-upstream.outputs.upstream_tag }}"
+          $content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($upstream))
+          $body = @{ message = "chore: upstream procesado $upstream"; content = $content }
+          # Si el archivo ya existe, hay que pasar su sha
+          try {
+            $existing = Invoke-RestMethod -Uri "$api/contents/upstream-state.txt" -Headers $headers -TimeoutSec 30
+            $body.sha = $existing.sha
+          } catch { Write-Host "upstream-state.txt no existia (se crea)" }
+          Invoke-RestMethod -Method Put -Uri "$api/contents/upstream-state.txt" -Headers $headers -ContentType 'application/json' -Body ($body | ConvertTo-Json) -TimeoutSec 30 | Out-Null
+          Write-Host "estado guardado: $upstream"
