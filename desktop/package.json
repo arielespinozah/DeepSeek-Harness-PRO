@@ -19,6 +19,7 @@
   "build": {
     "appId": "com.deepseek.harness.desktop",
     "productName": "DeepSeek Harness Desktop",
+    "electronVersion": "37.10.3",
     "directories": {
       "output": "dist",
       "buildResources": "build"
