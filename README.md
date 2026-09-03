@@ -3,13 +3,25 @@
 **Shell de escritorio para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)** — Windows x64.
 
 App Electron que arranca el servidor `dsh` oficial en un puerto local, abre la
-interfaz web en una **ventana nativa** y se **auto-actualiza con 1 clic**
-desde GitHub Releases.
+interfaz web en una **ventana nativa** y se **auto-actualiza con 1 clic**.
 
 > **Transparencia:** el motor (agente, herramientas, modelos) es el código
-> oficial de DeepSeek **sin modificaciones**. Este proyecto solo aporta la
-> capa de escritorio: instalador `.exe`, ventana nativa, auto-update y
-> procesos ocultos. No añade capacidades al agente.
+> oficial de DeepSeek **sin modificaciones**. Este proyecto aporta la capa de
+> escritorio: instalador `.exe`, ventana nativa, auto-update y procesos
+> ocultos. No añade capacidades al agente.
+
+## 🤖 Actualización automática desde el repo oficial
+
+Un [workflow de GitHub Actions](.github/workflows/auto-update.yml) revisa el
+repositorio oficial de DeepSeek **cada 6 horas** (y puede ejecutarse a mano
+con el botón *Run workflow*). Cuando DeepSeek publica una versión nueva:
+
+1. Descarga el código oficial del tag
+2. Compila el harness (perfil `official`)
+3. Empaqueta el servidor + re-aplica el fix de ventanas de consola
+4. Genera el instalador y publica la release aquí
+
+Las apps instaladas detectan la versión nueva y se actualizan solas con 1 clic.
 
 ## 📥 Descargar e instalar (Windows)
 
@@ -18,11 +30,6 @@ desde GitHub Releases.
 3. Ejecútalo → **Instalar** → listo
 
 > SmartScreen puede avisar (binario sin firmar): **Más información → Ejecutar de todas formas**.
-
-## 🔄 Actualizaciones
-
-La app consulta este repo al abrir; si hay versión nueva la descarga sola y
-pide *Reiniciar ahora* (1 clic). Tu historial de sesiones se conserva intacto.
 
 ## 🆚 vs. el oficial
 
@@ -34,7 +41,7 @@ pide *Reiniciar ahora* (1 clic). Tu historial de sesiones se conserva intacto.
 | Consolas | Visibles | **Ocultas** |
 | Capacidades | Referencia | **Idénticas** |
 
-## 🛠️ Compilar
+## 🛠️ Compilar localmente
 
 ```powershell
 cd desktop
@@ -42,8 +49,6 @@ npm install
 npm run pack        # genera dist\Setup.exe (sin publicar)
 npm run publish     # construye + sube a GitHub Releases (requiere GH_TOKEN)
 ```
-
-Ver [documentación completa](desktop/README.md) para detalles y estructura.
 
 ## 📄 Licencia
 
