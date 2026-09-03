@@ -20,6 +20,7 @@ jobs:
       has_update: ${{ steps.check.outputs.has_update }}
       upstream_tag: ${{ steps.check.outputs.upstream_tag }}
       upstream_version: ${{ steps.check.outputs.upstream_version }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
     steps:
       - name: Consultar ultimo release oficial
         id: check
@@ -33,6 +34,9 @@ jobs:
           # Version del server: tag tipo dsh-vX.Y.Z -> quitar prefijo dsh-
           VER=$(echo "$LATEST" | sed 's/^dsh-//')
           echo "upstream_version=$VER" >> "$GITHUB_OUTPUT"
+          # Hash determinista (7 hex) derivado del tag para DSH_CLIENT_COMMIT_HASH
+          SHA=$(echo -n "$LATEST" | sha1sum | cut -c1-7)
+          echo "upstream_sha=$SHA" >> "$GITHUB_OUTPUT"
           # Ultimo release que YA publicamos (para no repetir el mismo tag)
           OURS=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" \
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const r=(j||[]).find(x=>!x.draft);if(!r){console.log('none');return};const b=r.body||'';const m=b.match(/upstream: (\S+)/);console.log(m?m[1]:'none')})")
@@ -47,7 +51,6 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CI: "true"
-      DSH_CLIENT_COMMIT_HASH: auto
     steps:
       - name: Checkout del shell (este repo)
         uses: actions/checkout@v4
@@ -91,7 +94,7 @@ jobs:
         shell: pwsh
         working-directory: dsh-app
         run: |
-          $env:DSH_CLIENT_COMMIT_HASH = "${{ needs.check-upstream.outputs.upstream_tag }}"
+          $env:DSH_CLIENT_COMMIT_HASH = "${{ needs.check-upstream.outputs.upstream_sha }}"
           npm run build:official
 
       - name: Empaquetar servidor (prepare-server)
