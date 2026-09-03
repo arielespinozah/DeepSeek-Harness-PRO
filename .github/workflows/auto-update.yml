@@ -1,0 +1,137 @@
+name: Auto-update desde DeepSeek Harness oficial
+
+# Disparadores:
+#  - schedule: revisa cada 6 horas si el repo oficial publico algo nuevo
+#  - workflow_dispatch: boton "Run workflow" en la pestana Actions para forzar
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+# Permisos: GITHUB_TOKEN necesita escribir contenidos (crear release/commit).
+permissions:
+  contents: write
+
+jobs:
+  check-upstream:
+    name: Buscar version nueva del repo oficial
+    runs-on: ubuntu-latest
+    outputs:
+      has_update: ${{ steps.check.outputs.has_update }}
+      upstream_tag: ${{ steps.check.outputs.upstream_tag }}
+      upstream_version: ${{ steps.check.outputs.upstream_version }}
+    steps:
+      - name: Consultar ultimo release oficial
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ultimo release publicado por deepseek-ai/deepseek-harness (no drafts)
+          LATEST=$(curl -s "https://api.github.com/repos/deepseek-ai/deepseek-harness/releases?per_page=1" \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const r=j.find(x=>!x.draft);if(!r){process.exit(1)};console.log(r.tag_name)})")
+          echo "upstream_tag=$LATEST" >> "$GITHUB_OUTPUT"
+          # Version del server: tag tipo dsh-vX.Y.Z -> quitar prefijo dsh-
+          VER=$(echo "$LATEST" | sed 's/^dsh-//')
+          echo "upstream_version=$VER" >> "$GITHUB_OUTPUT"
+          # Ultimo release que YA publicamos (para no repetir el mismo tag)
+          OURS=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const r=(j||[]).find(x=>!x.draft);if(!r){console.log('none');return};const b=r.body||'';const m=b.match(/upstream: (\S+)/);console.log(m?m[1]:'none')})")
+          echo "ultimo upstream procesado: $OURS | oficial actual: $LATEST"
+          if [ "$OURS" != "$LATEST" ]; then echo "has_update=true" >> "$GITHUB_OUTPUT"; else echo "has_update=false" >> "$GITHUB_OUTPUT"; fi
+
+  build-and-publish:
+    name: Compilar y publicar instalador
+    needs: check-upstream
+    if: needs.check-upstream.outputs.has_update == 'true'
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CI: "true"
+      DSH_CLIENT_COMMIT_HASH: auto
+    steps:
+      - name: Checkout del shell (este repo)
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar pnpm
+        run: npm install -g pnpm@11.7.0
+
+      - name: Descargar codigo oficial del tag ${{ needs.check-upstream.outputs.upstream_tag }}
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.check-upstream.outputs.upstream_tag }}"
+          $url = "https://github.com/deepseek-ai/deepseek-harness/archive/refs/tags/$tag.zip"
+          Write-Host "Descargando $url"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\upstream.zip" -UseBasicParsing
+          Expand-Archive "$env:TEMP\upstream.zip" "$env:TEMP\upstream"
+          $inner = Get-ChildItem "$env:TEMP\upstream" -Directory | Select-Object -First 1
+          Copy-Item $inner.FullName "dsh-app" -Recurse
+          Write-Host "Codigo oficial en dsh-app/"
+
+      - name: Preparar arbol apps/desktop (scripts locales)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dsh-app\apps\desktop\scripts" | Out-Null
+          Copy-Item "desktop\scripts\prepare-server.mjs" "dsh-app\apps\desktop\scripts\prepare-server.mjs" -Force
+          Copy-Item "desktop\scripts\make-icon.mjs" "dsh-app\apps\desktop\scripts\make-icon.mjs" -Force
+          Write-Host "scripts de empaquetado copiados al arbol"
+
+      - name: Instalar dependencias del monorepo
+        shell: pwsh
+        working-directory: dsh-app
+        run: |
+          Set-Content -Path .npmrc -Value "verify-deps-before-run=false`nconfirm-modules-purge=false"
+          pnpm install
+
+      - name: Build oficial (perfil official + branding)
+        shell: pwsh
+        working-directory: dsh-app
+        run: |
+          $env:DSH_CLIENT_COMMIT_HASH = "${{ needs.check-upstream.outputs.upstream_tag }}"
+          npm run build:official
+
+      - name: Empaquetar servidor (prepare-server)
+        shell: pwsh
+        working-directory: dsh-app
+        run: node apps/desktop/scripts/prepare-server.mjs
+
+      - name: Re-aplicar fix de ventanas de consola (windowsHide)
+        shell: pwsh
+        working-directory: dsh-app
+        run: node "..\desktop\scripts\apply-windows-hide.mjs" apps/desktop/server
+
+      - name: Fijar version del instalador
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $ver = "${{ needs.check-upstream.outputs.upstream_version }}"
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $pkg.version = $ver
+          $pkg | ConvertTo-Json -Depth 20 | Set-Content package.json -Encoding UTF8
+          Write-Host "version del instalador fijada a: $ver"
+
+      - name: Publicar instalador (electron-builder)
+        shell: pwsh
+        working-directory: desktop
+        run: npx electron-builder --win --publish always
+
+      - name: Anotar el tag upstream en la release
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.check-upstream.outputs.upstream_version }}"
+          $tag = "v$ver"
+          $upstream = "${{ needs.check-upstream.outputs.upstream_tag }}"
+          Start-Sleep -Seconds 5
+          $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases" -Headers @{ Authorization = "token $env:GH_TOKEN" } -TimeoutSec 30
+          $rel = $rels | Where-Object { $_.tag_name -eq $tag } | Select-Object -First 1
+          if ($rel) {
+            $body = "Instalador de escritorio generado automaticamente desde DeepSeek Harness oficial.`n`nupstream: $upstream"
+            Invoke-RestMethod -Method Patch -Uri "https://api.github.com/repos/${{ github.repository }}/releases/$($rel.id)" -Headers @{ Authorization = "token $env:GH_TOKEN" } -ContentType "application/json" -Body (@{ body = $body } | ConvertTo-Json) -TimeoutSec 30 | Out-Null
+            Write-Host "release $tag anotada con upstream: $upstream"
+          } else {
+            Write-Host "AVISO: no se encontro la release $tag (revisar logs)"
+          }
