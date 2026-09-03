@@ -107,15 +107,27 @@ jobs:
         working-directory: dsh-app
         run: node "..\desktop\scripts\apply-windows-hide.mjs" apps/desktop/server
 
-      - name: Fijar version del instalador
+      - name: Fijar version del instalador (propia numeracion creciente)
         shell: pwsh
         working-directory: desktop
         run: |
-          $ver = "${{ needs.check-upstream.outputs.upstream_version }}"
+          # El instalador usa su PROPIA version creciente (v0.1.5, v0.1.6...),
+          # independiente de la version del upstream. electron-updater compara
+          # semver: si usasemos la version del harness (0.1.2-rc.1) seria MENOR
+          # que la 0.1.4 ya instalada y no se detectaria como actualizacion.
+          $token = $env:GH_TOKEN
+          $rels = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases?per_page=50" -Headers @{ Authorization = "token $token" } -TimeoutSec 30
+          $versions = @($rels | Where-Object { $_.tag_name -match '^v\d+\.\d+\.\d+$' -and -not $_.draft } | ForEach-Object { $_.tag_name.Substring(1) })
+          if ($versions.Count -eq 0) { $next = "0.1.0" } else {
+            $max = $versions | ForEach-Object { [version]$_ } | Sort-Object | Select-Object -Last 1
+            $next = "{0}.{1}.{2}" -f $max.Major, $max.Minor, ($max.Build + 1)
+          }
           $pkg = Get-Content package.json -Raw | ConvertFrom-Json
-          $pkg.version = $ver
+          $pkg.version = $next
           $pkg | ConvertTo-Json -Depth 20 | Set-Content package.json -Encoding UTF8
-          Write-Host "version del instalador fijada a: $ver"
+          Write-Host "version del instalador fijada a: $next"
+          # Guardar para el paso de anotacion
+          "NEXT_VERSION=$next" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Publicar instalador (electron-builder)
         shell: pwsh
@@ -125,7 +137,7 @@ jobs:
       - name: Anotar el tag upstream en la release
         shell: pwsh
         run: |
-          $ver = "${{ needs.check-upstream.outputs.upstream_version }}"
+          $ver = $env:NEXT_VERSION
           $tag = "v$ver"
           $upstream = "${{ needs.check-upstream.outputs.upstream_tag }}"
           Start-Sleep -Seconds 5
