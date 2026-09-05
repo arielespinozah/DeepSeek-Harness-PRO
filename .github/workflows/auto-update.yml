@@ -68,7 +68,7 @@ jobs:
       - name: Checkout del shell (este repo)
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js
+      - name: Configurar Node.js (solo para compilar; el ABI lo fija Electron)
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -114,6 +114,16 @@ jobs:
         shell: pwsh
         working-directory: dsh-app
         run: node apps/desktop/scripts/prepare-server.mjs
+
+      - name: Recompilar modulos nativos contra Electron 37 (fix ABI)
+        shell: pwsh
+        working-directory: dsh-app
+        run: |
+          # fs-ext (NAN) se compila con el ABI del Node del CI (22 -> ABI 127),
+          # pero la app empaqueta Electron 37 (ABI 136). electron-rebuild detecta
+          # el ABI incorrecto y recompila SOLO lo necesario contra los headers
+          # de Electron. Los prebuilds N-API (sharp/koffi) se saltan solos.
+          npx --yes @electron/rebuild -v 37.10.3 -m apps/desktop/server
 
       - name: Re-aplicar fix de ventanas de consola (windowsHide)
         shell: pwsh
